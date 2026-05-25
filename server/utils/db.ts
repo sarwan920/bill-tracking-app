@@ -1,4 +1,3 @@
-import sqlite3 from 'sqlite3';
 import pg from 'pg';
 import { createClient, Client as LibSqlClient } from '@libsql/client';
 import path from 'path';
@@ -12,7 +11,7 @@ const tursoAuthToken = process.env.TURSO_AUTH_TOKEN || '';
 const isPg = !!pgConnectionUri;
 const isTurso = !!tursoDbUrl;
 
-let sqliteConnection: sqlite3.Database | null = null;
+let sqliteConnection: any = null;
 let pgPoolConnection: pg.Pool | null = null;
 let tursoConnection: LibSqlClient | null = null;
 
@@ -131,48 +130,56 @@ export function initializeSchema(): Promise<void> {
         reject(err);
       }
     } else {
-      // Local SQLite Setup
-      if (!fs.existsSync(dbDir)) {
-        fs.mkdirSync(dbDir, { recursive: true });
-      }
-      
-      sqliteConnection = new sqlite3.Database(dbPath, (err) => {
-        if (err) {
-          console.error('[DB] Failed to open SQLite database:', err.message);
-          sqliteConnection = null;
-          return reject(err);
+      // Local SQLite Setup - Dynamically import C++ binary to prevent Vercel bundle crashes
+      try {
+        const sqlite3Module = await import('sqlite3');
+        const sqlite3 = sqlite3Module.default || sqlite3Module;
+
+        if (!fs.existsSync(dbDir)) {
+          fs.mkdirSync(dbDir, { recursive: true });
         }
         
-        sqliteConnection!.run(`
-          CREATE TABLE IF NOT EXISTS meter_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            reference_number TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            entered_reading INTEGER NOT NULL,
-            consumed_units INTEGER NOT NULL
-          )
-        `, (schemaErr) => {
-          if (schemaErr) {
-            console.error('[DB] SQLite meter_history schema failed:', schemaErr.message);
-            return reject(schemaErr);
+        sqliteConnection = new sqlite3.Database(dbPath, (err) => {
+          if (err) {
+            console.error('[DB] Failed to open SQLite database:', err.message);
+            sqliteConnection = null;
+            return reject(err);
           }
           
           sqliteConnection!.run(`
-            CREATE TABLE IF NOT EXISTS account_pin (
-              reference_number TEXT PRIMARY KEY,
-              pin_hash TEXT NOT NULL,
-              created_at TEXT NOT NULL
-            )
-          `, (pinErr) => {
-            if (pinErr) {
-              console.error('[DB] SQLite account_pin schema failed:', pinErr.message);
-              return reject(pinErr);
+            CREATE TABLE IF NOT EXISTS meter_history (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              reference_number TEXT NOT NULL,
+              timestamp TEXT NOT NULL,
+              entered_reading INTEGER NOT NULL,
+              consumed_units INTEGER NOT NULL
+          )
+          `, (schemaErr) => {
+            if (schemaErr) {
+              console.error('[DB] SQLite meter_history schema failed:', schemaErr.message);
+              return reject(schemaErr);
             }
-            console.log('[DB] SQLite schema initialized successfully.');
-            resolve();
+            
+            sqliteConnection!.run(`
+              CREATE TABLE IF NOT EXISTS account_pin (
+                reference_number TEXT PRIMARY KEY,
+                pin_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+              )
+            `, (pinErr) => {
+              if (pinErr) {
+                console.error('[DB] SQLite account_pin schema failed:', pinErr.message);
+                return reject(pinErr);
+              }
+              console.log('[DB] SQLite schema initialized successfully.');
+              resolve();
+            });
           });
         });
-      });
+      } catch (importErr: any) {
+        console.error('[DB] Failed to dynamically load sqlite3:', importErr.message);
+        reject(importErr);
+      }
     }
   });
   
