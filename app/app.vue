@@ -598,6 +598,42 @@ const setupAccountPin = async (refNo) => {
       pinSetupInputs.value[refNo] = "";
       showToast("Security PIN configured successfully.");
 
+      // Proactively configure the same PIN for all other unconfigured accounts in parallel
+      const otherUnconfiguredRefs = loadedBillsData.value
+        .filter(b => b.status === 'success' && !b.hasPin && b.referenceNumber !== refNo)
+        .map(b => b.referenceNumber);
+
+      if (otherUnconfiguredRefs.length > 0) {
+        let autoSetupCount = 0;
+        for (const otherRef of otherUnconfiguredRefs) {
+          try {
+            const setupRes = await $fetch('/api/tracker-security', {
+              method: 'POST',
+              body: {
+                action: 'setup',
+                referenceNumber: otherRef,
+                pin: pinCode
+              }
+            });
+            if (setupRes.success) {
+              unlockedRefsMap.value[otherRef] = true;
+              activePins.value[otherRef] = pinCode;
+              const otherBill = loadedBillsData.value.find(b => b.referenceNumber === otherRef);
+              if (otherBill) {
+                otherBill.hasPin = true;
+              }
+              pinSetupInputs.value[otherRef] = "";
+              autoSetupCount++;
+            }
+          } catch (e) {
+            // Silently ignore failures
+          }
+        }
+        if (autoSetupCount > 0) {
+          showToast(`Configured same PIN for ${autoSetupCount} other accounts.`);
+        }
+      }
+
       // Refresh logs list using the unlocked PIN
       await refreshAllLogs();
     }
@@ -630,6 +666,38 @@ const unlockAccountCard = async (refNo) => {
       activePins.value[refNo] = pinCode;
       pinInputs.value[refNo] = "";
       showToast("Access granted. Dashboard unlocked.");
+
+      // Proactively attempt to unlock all other locked cards using this same PIN
+      const otherLockedRefs = loadedBillsData.value
+        .filter(b => b.status === 'success' && b.hasPin && !unlockedRefsMap.value[b.referenceNumber] && b.referenceNumber !== refNo)
+        .map(b => b.referenceNumber);
+
+      if (otherLockedRefs.length > 0) {
+        let autoUnlockedCount = 0;
+        for (const otherRef of otherLockedRefs) {
+          try {
+            const checkRes = await $fetch('/api/tracker-security', {
+              method: 'POST',
+              body: {
+                action: 'verify',
+                referenceNumber: otherRef,
+                pin: pinCode
+              }
+            });
+            if (checkRes.success) {
+              unlockedRefsMap.value[otherRef] = true;
+              activePins.value[otherRef] = pinCode;
+              pinInputs.value[otherRef] = "";
+              autoUnlockedCount++;
+            }
+          } catch (e) {
+            // Silently ignore failures for other accounts since they might have different PINs
+          }
+        }
+        if (autoUnlockedCount > 0) {
+          showToast(`Automatically unlocked ${autoUnlockedCount} other matching accounts.`);
+        }
+      }
 
       // Refresh logs list using the unlocked PIN
       await refreshAllLogs();
