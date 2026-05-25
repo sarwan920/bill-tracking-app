@@ -1,0 +1,21 @@
+{
+  "name": "Bill-Test-App",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "axios": "^1.16.1",
+    "cheerio": "^1.2.0",
+    "nuxt": "^4.4.6",
+    "qs": "^6.15.2",
+    "sqlite3": "^6.0.1",
+    "vue": "^3.5.34",
+    "vue-router": "^5.0.7"
+  }
+}
