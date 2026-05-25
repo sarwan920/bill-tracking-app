@@ -83,7 +83,7 @@ export async function fetchSingleBill(refNo: string): Promise<BillResult> {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             },
-            timeout: 7000
+            timeout: 15000
         });
 
         const setCookieHeaders = getResponse.headers['set-cookie'] || [];
@@ -116,7 +116,7 @@ export async function fetchSingleBill(refNo: string): Promise<BillResult> {
                 'Origin': 'https://bill.pitc.com.pk',
                 'Cookie': cookieString
             },
-            timeout: 10000
+            timeout: 15000
         });
 
         const $ = cheerio.load(postResponse.data);
