@@ -1,24 +1,36 @@
 import sqlite3 from 'sqlite3';
 import pg from 'pg';
+import { createClient, Client as LibSqlClient } from '@libsql/client';
 import path from 'path';
 import fs from 'fs';
 
-// Check if PostgreSQL DATABASE_URL is provided in the environment
+// Check which database connection environment variables are set
 const pgConnectionUri = process.env.DATABASE_URL;
+const tursoDbUrl = process.env.TURSO_DB_URL;
+const tursoAuthToken = process.env.TURSO_AUTH_TOKEN || '';
+
 const isPg = !!pgConnectionUri;
+const isTurso = !!tursoDbUrl;
 
 let sqliteConnection: sqlite3.Database | null = null;
 let pgPoolConnection: pg.Pool | null = null;
+let tursoConnection: LibSqlClient | null = null;
 
-// Initialize Postgres Client Pool if active
-if (isPg) {
+// Initialize appropriate database connection pool
+if (isTurso) {
+  console.log('[DB] TURSO_DB_URL detected. Activating cloud Turso (libSQL) adapter mode.');
+  tursoConnection = createClient({
+    url: tursoDbUrl,
+    authToken: tursoAuthToken
+  });
+} else if (isPg) {
   console.log('[DB] DATABASE_URL detected. Activating cloud PostgreSQL adapter mode.');
   pgPoolConnection = new pg.Pool({
     connectionString: pgConnectionUri,
     ssl: pgConnectionUri.includes('localhost') ? false : { rejectUnauthorized: false }
   });
 } else {
-  console.log('[DB] No DATABASE_URL found. Running locally on persistent SQLite adapter mode.');
+  console.log('[DB] No cloud environment variables detected. Running locally on persistent SQLite adapter mode.');
 }
 
 /**
@@ -28,7 +40,8 @@ const dbDir = path.resolve(process.cwd(), 'server/data');
 const dbPath = path.join(dbDir, 'database.sqlite');
 
 /**
- * Normalizes SQL queries and placeholders between SQLite and PostgreSQL databases.
+ * Normalizes SQL queries and placeholders for PostgreSQL databases.
+ * (Turso and local SQLite do not require this since they are both libSQL/SQLite based).
  */
 function translateQuery(query: string): string {
   if (!isPg) return query;
@@ -52,7 +65,7 @@ function translateQuery(query: string): string {
 }
 
 /**
- * Initializes tables in both environments
+ * Initializes tables dynamically in the active environment
  */
 let dbInitializedPromise: Promise<void> | null = null;
 
@@ -60,7 +73,33 @@ export function initializeSchema(): Promise<void> {
   if (dbInitializedPromise) return dbInitializedPromise;
   
   dbInitializedPromise = new Promise(async (resolve, reject) => {
-    if (isPg) {
+    if (isTurso) {
+      try {
+        // Initialize Turso tables natively using standard SQLite syntax
+        await tursoConnection!.execute(`
+          CREATE TABLE IF NOT EXISTS meter_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reference_number TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            entered_reading INTEGER NOT NULL,
+            consumed_units INTEGER NOT NULL
+          )
+        `);
+        
+        await tursoConnection!.execute(`
+          CREATE TABLE IF NOT EXISTS account_pin (
+            reference_number TEXT PRIMARY KEY,
+            pin_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          )
+        `);
+        console.log('[DB] Turso schema initialized successfully.');
+        resolve();
+      } catch (err: any) {
+        console.error('[DB] Turso schema initialization failed:', err.message);
+        reject(err);
+      }
+    } else if (isPg) {
       try {
         const client = await pgPoolConnection!.connect();
         try {
@@ -145,9 +184,13 @@ export function initializeSchema(): Promise<void> {
  */
 export async function dbAll(query: string, params: any[] = []): Promise<any[]> {
   await initializeSchema();
-  const sql = translateQuery(query);
   
-  if (isPg) {
+  if (isTurso) {
+    const res = await tursoConnection!.execute({ sql: query, args: params });
+    // Convert rows to plain javascript objects
+    return res.rows.map(row => ({ ...row }));
+  } else if (isPg) {
+    const sql = translateQuery(query);
     const res = await pgPoolConnection!.query(sql, params);
     return res.rows || [];
   } else {
@@ -165,9 +208,16 @@ export async function dbAll(query: string, params: any[] = []): Promise<any[]> {
  */
 export async function dbRun(query: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
   await initializeSchema();
-  const sql = translateQuery(query);
   
-  if (isPg) {
+  if (isTurso) {
+    const res = await tursoConnection!.execute({ sql: query, args: params });
+    let lastID = 0;
+    if (res.lastInsertRowid !== undefined) {
+      lastID = Number(res.lastInsertRowid) || 0;
+    }
+    return { lastID, changes: res.rowsAffected || 0 };
+  } else if (isPg) {
+    const sql = translateQuery(query);
     const res = await pgPoolConnection!.query(sql, params);
     let lastID = 0;
     if (res.rows && res.rows.length > 0 && res.rows[0].id !== undefined) {
